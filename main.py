@@ -29,7 +29,7 @@ def initialize_logger():
 def get_all_rule_data(logger):
     logger.info('Fetching muting rule data...')
 
-    # pull muting rules excel into a dataframe
+    # Pull muting rules Excel sheet into a dataframe
     muting_df = pd.read_excel('Muting Rules.xlsx', usecols=['Client', 'Environment', 'Muting Rule ID', 'NR Account #'])
 
     if not muting_df.empty:
@@ -82,6 +82,7 @@ def get_patching_events(logger):
 
 def get_muting_rule_info(client, envir, df, logger):
     logger.info('Extracting muting rule ID and New Relic account number...')
+
     try:
         rule_df = df[(df['Client'] == client) & (df['Environment'] == envir)]
         rule_ids = [int(value) for value in rule_df['Muting Rule ID']]
@@ -94,6 +95,8 @@ def get_muting_rule_info(client, envir, df, logger):
 
 
 def mutate_nr_rules(monday_items, muting_df, logger):
+    logger.info('Processing patching events...')
+
     # Iterate through patching events and action any events that are still in progress
     for i in range(34, 35):
         if monday_items[i]['column_values'][1]['text'] == 'Event Prep In Progress':
@@ -103,8 +106,8 @@ def mutate_nr_rules(monday_items, muting_df, logger):
             patching_window = monday_items[i]['column_values'][3]['text']
             end_time_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M') + timedelta(hours=int(patching_window))
             end_time = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
-            logger.debug(f'Patching event:\n'
-                         f'   {client_name}: {environment} at {start_time} for {patching_window} hours, '
+            logger.debug(f'   Patching event:\n'
+                         f'      {client_name}: {environment} at {start_time} for {patching_window} hours, '
                          f'ending at {end_time}')
 
             if TESTING:
@@ -137,7 +140,7 @@ def mutate_nr_rules(monday_items, muting_df, logger):
             """)
 
             for muting_rule_id in muting_rule_ids:
-                logger.info(f'Mutating muting rule {muting_rule_id}...')
+                logger.info(f'   Mutating muting rule {muting_rule_id}...')
 
                 # GraphQL query data to mutate the appropriate muting rule
                 nr_gql_formatted = nr_gql_template.substitute({'account_id': nr_account_num,
@@ -149,9 +152,9 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                 nr_response = requests.post(nr_endpoint, headers=nr_headers, json={'query': nr_gql_formatted}).json()
 
                 if nr_response['data']['alertsMutingRuleUpdate']['id'] == muting_rule_id:
-                    logger.info(f'   Muting rule ID {muting_rule_id} was successfully modified.')
+                    logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
                 else:
-                    logger.warning(f'There was an error mutating the muting role:\n{nr_response}')
+                    logger.warning(f'      There was an error mutating the muting role:\n{nr_response}')
                     sys.exit(1)
 
 
