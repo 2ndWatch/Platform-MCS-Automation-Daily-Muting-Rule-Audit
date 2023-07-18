@@ -83,6 +83,13 @@ def get_patching_events(logger):
 def get_muting_rule_info(client, envir, df, logger):
     logger.info('Extracting muting rule ID and New Relic account number...')
 
+    # Special handling for Lenovo patching
+    if client == 'Lenovo':
+        if 'Linux' in envir:
+            envir = 'Weekly Linux'
+        elif 'Windows' in envir:
+            envir = 'Weekly Windows'
+
     try:
         rule_df = df[(df['Client'] == client) & (df['Environment'] == envir)]
         rule_ids = [int(value) for value in rule_df['Muting Rule ID']]
