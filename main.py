@@ -7,6 +7,11 @@ import logging
 
 TESTING = True
 
+# TODO: API keys as secrets for deployment
+# TODO: service account API keys - which ones?
+# TODO: muting rule spreadsheet --> database (DynamoDB?)
+# TODO: send log to S3
+
 
 def initialize_logger():
     # Initialize the logger
@@ -89,6 +94,7 @@ def get_muting_rule_info(client, envir, df, logger):
 
 
 def mutate_nr_rules(monday_items, muting_df, logger):
+    # Iterate through patching events and action any events that are still in progress
     for i in range(34, 35):
         if monday_items[i]['column_values'][1]['text'] == 'Event Prep In Progress':
             client_name = monday_items[i]['name']
@@ -97,12 +103,19 @@ def mutate_nr_rules(monday_items, muting_df, logger):
             patching_window = monday_items[i]['column_values'][3]['text']
             end_time_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M') + timedelta(hours=int(patching_window))
             end_time = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
-            print(f'{client_name}: {environment} at {start_time} for {patching_window} hours, ending at {end_time}')
+            logger.debug(f'Patching event:\n'
+                         f'   {client_name}: {environment} at {start_time} for {patching_window} hours, '
+                         f'ending at {end_time}')
 
-            # get correct muting rule ID and account from dataframe using patching event data
-            muting_rule_ids, nr_account_num = get_muting_rule_info(client_name, environment, muting_df, logger)
+            if TESTING:
+                # Test data for mutating a rule in 2W-MCS-Tooling-Test NR account
+                muting_rule_ids = ['38434772']
+                nr_account_num = 3720977
+            else:
+                # Muting rule ID and account corresponding to patching event data
+                muting_rule_ids, nr_account_num = get_muting_rule_info(client_name, environment, muting_df, logger)
 
-            # mutate correct muting rule with updated date and time
+            # Mutate correct muting rule with correctly-formatted date and time
             # NR API details
             nr_api_key = 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU'
             nr_endpoint = 'https://api.newrelic.com/graphql'
@@ -111,41 +124,35 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                 'API-Key': nr_api_key,
             }
             enabled = 'true'
+            # Format start time string
             start_time_split = start_time.split(' ')
             start_time_nr = start_time_split[0] + 'T' + start_time_split[1] + ':00'
-            print(start_time_nr)
-            print(end_time)
             nr_gql_template = Template("""
             mutation {
-              alertsMutingRuleUpdate(accountId: $account_id, rule: {enabled: $enabled, schedule: {startTime: "$start_time", 
-                endTime: "$end_time"}}, id: $rule_id) {
+              alertsMutingRuleUpdate(accountId: $account_id, rule: {enabled: $enabled, schedule: 
+                {startTime: "$start_time", endTime: "$end_time"}}, id: $rule_id) {
                 id
               }
             }
             """)
 
             for muting_rule_id in muting_rule_ids:
+                logger.info(f'Mutating muting rule {muting_rule_id}...')
 
-                if TESTING:
-                    # GraphQL query data to mutate a test muting rule in the Tooling-Test New Relic account
-                    nr_gql_formatted = nr_gql_template.substitute({'account_id': 3720977,
-                                                                   'enabled': enabled,
-                                                                   'start_time': start_time_nr,
-                                                                   'end_time': end_time,
-                                                                   'rule_id': '38434772'})
+                # GraphQL query data to mutate the appropriate muting rule
+                nr_gql_formatted = nr_gql_template.substitute({'account_id': nr_account_num,
+                                                               'enabled': enabled,
+                                                               'start_time': start_time_nr,
+                                                               'end_time': end_time,
+                                                               'rule_id': muting_rule_id})
+
+                nr_response = requests.post(nr_endpoint, headers=nr_headers, json={'query': nr_gql_formatted}).json()
+
+                if nr_response['data']['alertsMutingRuleUpdate']['id'] == muting_rule_id:
+                    logger.info(f'   Muting rule ID {muting_rule_id} was successfully modified.')
                 else:
-                    # GraphQL query data to mutate the appropriate muting rule
-                    nr_gql_formatted = nr_gql_template.substitute({'account_id': nr_account_num,
-                                                                   'enabled': enabled,
-                                                                   'start_time': start_time,
-                                                                   'end_time': end_time,
-                                                                   'rule_id': muting_rule_id})
-
-                nr_response = requests.post(nr_endpoint, headers=nr_headers, json={'query': nr_gql_formatted})
-                print(nr_response.json())
-
-                if nr_response.json()['data']['alertsMutingRuleUpdate']['id'] == muting_rule_id:
-                    print(f'Muting rule ID {muting_rule_id} was successfully modified.')
+                    logger.warning(f'There was an error mutating the muting role:\n{nr_response}')
+                    sys.exit(1)
 
 
 def handler():
