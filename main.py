@@ -70,12 +70,14 @@ def get_patching_events(logger):
 
     # Call the Monday API and transform the response into JSON format
     response = requests.get(endpoint, headers=headers, json={'query': gql_query}).json()
+    logger.debug(f'Monday API response:\n{response}')
 
     if 'errors' in response.keys():
         logger.warning(f'There was an error calling the Monday API:\n{response}')
         sys.exit(1)
     else:
         monday_items = response['data']['boards'][0]['items']
+        logger.debug(f'Monday items:\n{monday_items}')
         logger.info('   Patching events collected successfully.')
         return monday_items
 
@@ -113,9 +115,8 @@ def mutate_nr_rules(monday_items, muting_df, logger):
             patching_window = monday_items[i]['column_values'][3]['text']
             end_time_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M') + timedelta(hours=int(patching_window))
             end_time = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
-            logger.debug(f'   Patching event:\n'
-                         f'      {client_name}: {environment} at {start_time} for {patching_window} hours, '
-                         f'ending at {end_time}')
+            logger.debug(f'   Patching event: {client_name}: {environment} at {start_time} for '
+                         f'{patching_window} hours, ending at {end_time}')
 
             if TESTING:
                 # Test data for mutating a rule in 2W-MCS-Tooling-Test NR account
@@ -157,6 +158,7 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                                                                'rule_id': muting_rule_id})
 
                 nr_response = requests.post(nr_endpoint, headers=nr_headers, json={'query': nr_gql_formatted}).json()
+                logger.debug(f'New Relic API response:\n{nr_response}')
 
                 if nr_response['data']['alertsMutingRuleUpdate']['id'] == muting_rule_id:
                     logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
