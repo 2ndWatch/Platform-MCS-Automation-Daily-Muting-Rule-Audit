@@ -129,6 +129,8 @@ def check_nr_rules(monday_items, muting_df, logger):
     rule_ids_not_mutated = []
     events_not_processed = []
     nr_response = None
+    lenovo_win_mod = False
+    lenovo_linux_mod = False
 
     nbly_patching_windows = {
         38495798: {
@@ -154,9 +156,7 @@ def check_nr_rules(monday_items, muting_df, logger):
     }
 
     try:
-        # Iterate through patching events and action any events that are still in progress
-        # for i in range(len(monday_items)):
-        for i in range(42, 43):
+        for i in range(len(monday_items)):
             event_status = monday_items[i]['column_values'][1]['text']
             client_name = monday_items[i]['name']
             environment = monday_items[i]['column_values'][0]['text']
@@ -169,6 +169,10 @@ def check_nr_rules(monday_items, muting_df, logger):
 
             if client_name in clients_without_muting:
                 logger.info(f'\n   Event {i + 1}: {client_name} does not have muting rules in place; skipping event.')
+                continue
+            # If the first instance of an upcoming Lenovo event has already been mutated, skip any other events
+            elif (client_name == 'Lenovo' and lenovo_win_mod) or (client_name == 'Lenovo' and lenovo_linux_mod):
+                logger.info(f'\n   Event {i + 1}: More recent Lenovo event is scheduled; skipping event.')
                 continue
             else:
                 logger.info(f'\n   Event {i + 1}: {event_status} for {client_name} {environment} at {start_time_nr} '
@@ -231,7 +235,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                     # if needed, mutate if times are incorrect and enable rule
                     for muting_rule_id in muting_rule_ids:
 
-                        # Special handling for Neighborly event times
+                        # Special time handling for Neighborly event times
                         if client_name == 'Neighborly':
                             nbly_patching_window = nbly_patching_windows[muting_rule_id]['length']
                             start_delta = nbly_patching_windows[muting_rule_id]['delta']
@@ -272,6 +276,12 @@ def check_nr_rules(monday_items, muting_df, logger):
 
                                 try:
                                     if nr_response['data']['alertsMutingRuleUpdate']['id'] == str(muting_rule_id):
+                                        # Sepcial handling for weekly repeating Lenovo patching events
+                                        if client_name == 'Lenovo':
+                                            if 'Windows' in environment:
+                                                lenovo_win_mod = True
+                                            elif 'Linux' in environment:
+                                                lenovo_linux_mod = True
                                         logger.info(f'      Muting rule ID {muting_rule_id} was successfully enabled.')
                                 except KeyError:
                                     logger.warning(f'      There was an error enabling the muting role:\n'
@@ -293,6 +303,12 @@ def check_nr_rules(monday_items, muting_df, logger):
 
                                 try:
                                     if nr_response['data']['alertsMutingRuleUpdate']['id'] == str(muting_rule_id):
+                                        # Sepcial handling for weekly repeating Lenovo patching events
+                                        if client_name == 'Lenovo':
+                                            if 'Windows' in environment:
+                                                lenovo_win_mod = True
+                                            elif 'Linux' in environment:
+                                                lenovo_linux_mod = True
                                         logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
                                 except KeyError:
                                     logger.warning(f'      There was an error mutating the muting role:\n{nr_response}')
