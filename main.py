@@ -7,7 +7,6 @@ import logging
 
 TESTING = False
 
-
 # TODO: API keys as secrets for deployment
 # TODO: service account API keys - which ones?
 # TODO: muting rule spreadsheet --> S3
@@ -111,27 +110,58 @@ def get_muting_rule_info(client, envir, df, logger):
         return None, None
 
 
-# TODO: check handling for Neighborly
+def transform_event_times(start, window, start_delta=None):
+    start_time_dt = datetime.strptime(start, '%Y-%m-%d %H:%M')
+    end_time_dt = datetime.strptime(start, '%Y-%m-%d %H:%M') + timedelta(hours=float(window))
+
+    if start_delta:
+        start_time_dt = start_time_dt + timedelta(hours=float(start_delta))
+        end_time_dt = end_time_dt + timedelta(hours=float(start_delta))
+
+    start_time = datetime.strftime(start_time_dt, '%Y-%m-%dT%H:%M:%S')
+    end_time = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
+    return start_time, end_time
+
+
 def check_nr_rules(monday_items, muting_df, logger):
     logger.info('Processing patching events...')
     rule_ids_not_mutated = []
     events_not_processed = []
     nr_response = None
 
+    nbly_patching_windows = {
+        38495798: {
+            'description': 'Dev/QA ssm_patch_wave1',
+            'length': 1,
+            'delta': 0
+        },
+        38495968: {
+            'description': 'Dev/QA ssm_patch_wave1.5',
+            'length': 3,
+            'delta': 1
+        },
+        38496432: {
+            'description': 'Production ssm_patch_wave2',
+            'length': 1,
+            'delta': 0
+        },
+        38496605: {
+            'description': 'Production ssm_patch_wave2.5',
+            'length': 3,
+            'delta': 1
+        }
+    }
+
     # Iterate through patching events and action any events that are still in progress
     # for i in range(len(monday_items)):
-    for i in range(44, 48):
+    for i in range(42, 43):
         event_status = monday_items[i]['column_values'][1]['text']
         client_name = monday_items[i]['name']
         environment = monday_items[i]['column_values'][0]['text']
         patching_window = monday_items[i]['column_values'][3]['text']
         start_time = monday_items[i]['column_values'][2]['text']
-        # Format start time string
-        start_time_split = start_time.split(' ')
-        start_time_nr = start_time_split[0] + 'T' + start_time_split[1] + ':00'
-        # Calculate end time and format string
-        end_time_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M') + timedelta(hours=float(patching_window))
-        end_time_nr = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
+
+        start_time_nr, end_time_nr = transform_event_times(start_time, patching_window)
 
         clients_without_muting = ['2W Infra', 'Gas Station TV', 'Michael Kors', 'NAIC', 'Symetra', 'TitleMax']
 
@@ -198,6 +228,13 @@ def check_nr_rules(monday_items, muting_df, logger):
                 # Check rule for start and end time and enabled;
                 # if needed, mutate if times are incorrect and enable rule
                 for muting_rule_id in muting_rule_ids:
+                    if client_name == 'Neighborly':
+                        nbly_patching_window = nbly_patching_windows[muting_rule_id]['length']
+                        start_delta = nbly_patching_windows[muting_rule_id]['delta']
+                        start_time_nr, end_time_nr = transform_event_times(start_time,
+                                                                           nbly_patching_window,
+                                                                           start_delta=start_delta)
+
                     nr_gql_query_formatted = nr_gql_query_template.substitute({'account_id': nr_account_num,
                                                                                'rule_id': muting_rule_id})
                     try:
@@ -211,12 +248,29 @@ def check_nr_rules(monday_items, muting_df, logger):
                         event_end = event_rule['schedule']['endTime']
                         enabled = event_rule['enabled']
 
-                        # If event start time and end time match what's in Monday, skip mutation
+                        # If rule start time and end time match Monday event data, skip mutation
                         if start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and enabled:
                             logger.info(f'   Muting rule {muting_rule_id} times match Monday event; no action taken.')
                             continue
                         elif start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and not enabled:
-                            # TODO: enable rule
+                            logger.info(f'   Muting rule {muting_rule_id} times match Monday event but rule is '
+                                        f'disabled; enabling rule...')
+
+                            nr_gql_enable_formatted = nr_gql_enable_template.substitute(
+                                {'account_id': nr_account_num,
+                                 'rule_id': muting_rule_id,
+                                 'enabled': 'true'})
+
+                            nr_response = requests.post(nr_endpoint,
+                                                        headers=nr_headers,
+                                                        json={'query': nr_gql_enable_formatted}).json()
+                            logger.debug(f'New Relic API response:\n{nr_response}')
+
+                            if nr_response['data']['alertsMutingRuleUpdate']['id'] == str(muting_rule_id):
+                                logger.info(f'      Muting rule ID {muting_rule_id} was successfully enabled.')
+                            else:
+                                logger.warning(f'      There was an error enabling the muting role:\n'
+                                               f'{nr_response}')
                             continue
                         else:
                             logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
@@ -258,7 +312,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                     logger.debug(f'New Relic API response:\n{nr_response}')
 
                     try:
-                        logger.warning(f'      NR error: {muting_rule_id} {nr_response["errors"][0]["message"]}')
+                        logger.warning(f'      NR error for {muting_rule_id}: {nr_response["errors"][0]["message"]}')
                         rule_ids_not_mutated.append(muting_rule_id)
                     except KeyError:
                         if not nr_response['data']['actor']['account']['alerts']['mutingRule']['enabled']:
