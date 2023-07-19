@@ -4,21 +4,28 @@ from string import Template
 import requests
 import sys
 import logging
+import boto3
+from botocore import exceptions
+import io
 
-TESTING = False
 
-
-# TODO: API keys as secrets for deployment
 # TODO: service account API keys - which ones?
-# TODO: muting rule spreadsheet --> S3
 # TODO: send log to S3
+
+
+session = boto3.Session()
+s3 = session.client('s3')
+ssm = session.client('ssm')
+
+BUCKET = '2w-nr-muting-rules-automation'
+LOG_FILE = f'muting_automation_{datetime.now().strftime("%Y-%m-%d_%H%M%S")}.log'
 
 
 def initialize_logger():
     # Initialize the logger
     logger = logging.getLogger('muting_change')
     logging.basicConfig(level=logging.DEBUG,
-                        filename=f'muting_change_{datetime.now().strftime("%Y-%m-%d_%H%M%S")}.log',
+                        filename=LOG_FILE,
                         filemode='a')
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
@@ -30,8 +37,13 @@ def initialize_logger():
 def get_stored_rule_data(logger):
     logger.info('Fetching muting rule info...')
 
-    # Pull muting rules Excel sheet into a dataframe
-    muting_df = pd.read_excel('Muting Rules.xlsx', usecols=['Client', 'Environment', 'Muting Rule ID', 'NR Account #'])
+    key = 'Muting Rules.xlsx'
+
+    muting_rules_file = s3.get_object(Bucket=BUCKET, Key=key)
+    muting_rules_data = muting_rules_file['Body'].read()
+
+    columns = ['Client', 'Environment', 'Muting Rule ID', 'NR Account #']
+    muting_df = pd.read_excel(io.BytesIO(muting_rules_data), usecols=columns)
 
     if not muting_df.empty:
         logger.info('   Muting rule IDs loaded successfully.')
@@ -41,13 +53,26 @@ def get_stored_rule_data(logger):
         sys.exit(1)
 
 
+def get_api_key(api, logger):
+    param_dict = {
+        'monday': 'ae-muting-automation-monday-key',
+        'new_relic': 'ae-muting-automation-new-relic-key'
+    }
+    try:
+        response = ssm.get_parameter(Name=param_dict[api], WithDecryption=True)
+        key = response['Parameter']['Value']
+        logger.info(f'   {api} key retrieved successfully.')
+        return key
+    except exceptions.ClientError as e:
+        logger.warning(f'\nAPI key not retrieved from Parameter Store:\n{e}')
+        sys.exit(1)
+
+
 def get_patching_events(logger):
     logger.info('Fetching patching events...')
 
     # Monday API call data
-    api_token = 'eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjI2OTMxOTg5MywiYWFpIjoxMSwidWlkIjozMzcyNzc0NCwiaWFkIjoiMjAyMy0wNy0xN1' \
-                'QxOToxMzo0OS4xNjlaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6NDE3MTQ5MywicmduIjoidXNlMSJ9.iYC1a-24mBIfGesr' \
-                'iT_OVvVC3t2zXVGewv2dvYcf0zc'
+    api_token = get_api_key('monday', logger)
     endpoint = 'https://api.monday.com/v2'
     headers = {
         'Authorization': api_token,
@@ -124,6 +149,21 @@ def transform_event_times(start, window, start_delta=None):
     return start_time, end_time
 
 
+def send_log_to_s3(logger):
+    logger.info('Sending the log file to S3...')
+    body = open(LOG_FILE, 'rb')
+    key = f'logs/{LOG_FILE}'
+
+    try:
+        response = s3.upload_file(LOG_FILE, Bucket=BUCKET, Key=key)
+        logger.info('   The log file has been uploaded successfully.')
+    except exceptions.ClientError as e:
+        logger.warning(f'   There was an error uploading the log:\n'
+                       f'   {e}')
+
+    body.close()
+
+
 def check_nr_rules(monday_items, muting_df, logger):
     logger.info('Processing patching events...')
     rule_ids_not_mutated = []
@@ -156,7 +196,50 @@ def check_nr_rules(monday_items, muting_df, logger):
     }
 
     try:
-        for i in range(len(monday_items)):
+        # NR API details
+        nr_api_key = get_api_key('new_relic', logger)
+        nr_endpoint = 'https://api.newrelic.com/graphql'
+        nr_headers = {
+            'Content-Type': 'application/json',
+            'API-Key': nr_api_key,
+        }
+        nr_gql_mutate_template = Template("""
+            mutation {
+              alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: {enabled: $enabled, schedule: 
+                {startTime: "$start_time", endTime: "$end_time"}}) {
+                id
+              }
+            }
+            """)
+        nr_gql_query_template = Template("""
+                {
+                  actor {
+                    account(id: $account_id) {
+                      alerts {
+                        mutingRule(id: $rule_id) {
+                          id
+                          enabled
+                          schedule {
+                            endTime
+                            startTime
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+            """)
+        nr_gql_enable_template = Template("""
+            mutation {
+                alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: 
+                  {enabled: $enabled}) {
+                  id
+              }
+            }
+            """)
+
+        # for i in range(len(monday_items)):
+        for i in range(30, 31):
             event_status = monday_items[i]['column_values'][1]['text']
             client_name = monday_items[i]['name']
             environment = monday_items[i]['column_values'][0]['text']
@@ -178,57 +261,10 @@ def check_nr_rules(monday_items, muting_df, logger):
                 logger.info(f'\n   Event {i + 1}: {event_status} for {client_name} {environment} at {start_time_nr} '
                             f'for {patching_window} hours, ending at {end_time_nr}.')
 
-                if TESTING:
-                    # Test data for mutating a rule in 2W-MCS-Tooling-Test NR account
-                    muting_rule_ids = ['38434772']
-                    nr_account_num = 3720977
-                else:
-                    # Muting rule ID and account corresponding to patching event data
-                    muting_rule_ids, nr_account_num = get_muting_rule_info(client_name, environment, muting_df, logger)
-                    if not muting_rule_ids:
-                        continue
-
-                # NR API details
-                nr_api_key = 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU'
-                nr_endpoint = 'https://api.newrelic.com/graphql'
-                nr_headers = {
-                    'Content-Type': 'application/json',
-                    'API-Key': nr_api_key,
-                }
-                nr_gql_mutate_template = Template("""
-                    mutation {
-                      alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: {enabled: $enabled, schedule: 
-                        {startTime: "$start_time", endTime: "$end_time"}}) {
-                        id
-                      }
-                    }
-                    """)
-                nr_gql_query_template = Template("""
-                        {
-                          actor {
-                            account(id: $account_id) {
-                              alerts {
-                                mutingRule(id: $rule_id) {
-                                  id
-                                  enabled
-                                  schedule {
-                                    endTime
-                                    startTime
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                    """)
-                nr_gql_enable_template = Template("""
-                    mutation {
-                        alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: 
-                          {enabled: $enabled}) {
-                          id
-                      }
-                    }
-                    """)
+                # Muting rule ID and account corresponding to patching event data
+                muting_rule_ids, nr_account_num = get_muting_rule_info(client_name, environment, muting_df, logger)
+                if not muting_rule_ids:
+                    continue
 
                 if event_status == 'Event Prep In Progress' or event_status == 'To-Do':
                     # Check rule for start and end time and enabled;
@@ -372,9 +408,10 @@ def handler(event, context):
     muting_df = get_stored_rule_data(logger)
     monday_items = get_patching_events(logger)
     not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
-    logger.warning(f'\nProcessing is complete.\n'
+    logger.info(f'\nProcessing is complete.\n'
                    f'   The following rule IDs were not mutated due to errors: {not_mutated}\n'
                    f'   The following events were not processed due to errors: {not_processed}')
+    send_log_to_s3(logger)
 
 
 handler('', '')
