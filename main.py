@@ -7,6 +7,7 @@ import logging
 
 TESTING = False
 
+
 # TODO: API keys as secrets for deployment
 # TODO: service account API keys - which ones?
 # TODO: muting rule spreadsheet --> S3
@@ -238,12 +239,12 @@ def check_nr_rules(monday_items, muting_df, logger):
                                                                                nbly_patching_window,
                                                                                start_delta=start_delta)
 
-                        nr_gql_query_formatted = nr_gql_query_template.substitute({'account_id': nr_account_num,
-                                                                                   'rule_id': muting_rule_id})
+                        nr_gql_query_fmtd = nr_gql_query_template.substitute({'account_id': nr_account_num,
+                                                                              'rule_id': muting_rule_id})
                         try:
                             nr_response = requests.post(nr_endpoint,
                                                         headers=nr_headers,
-                                                        json={'query': nr_gql_query_formatted}).json()
+                                                        json={'query': nr_gql_query_fmtd}).json()
                             logger.debug(f'New Relic API response:\n{nr_response}')
 
                             event_rule = nr_response['data']['actor']['account']['alerts']['mutingRule']
@@ -253,19 +254,20 @@ def check_nr_rules(monday_items, muting_df, logger):
 
                             # If rule start time and end time match Monday event data, skip mutation
                             if start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and enabled:
-                                logger.info(f'   Muting rule {muting_rule_id} times match Monday event; no action taken.')
+                                logger.info(
+                                    f'   Muting rule {muting_rule_id} times match Monday event; no action taken.')
                                 continue
                             elif start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and not enabled:
                                 logger.info(f'   Muting rule {muting_rule_id} times match Monday event but rule is '
                                             f'disabled; enabling rule...')
 
-                                nr_gql_enable_formatted = nr_gql_enable_template.substitute(
+                                nr_gql_enable_fmtd = nr_gql_enable_template.substitute(
                                     {'account_id': nr_account_num,
                                      'rule_id': muting_rule_id,
                                      'enabled': 'true'})
                                 nr_response = requests.post(nr_endpoint,
                                                             headers=nr_headers,
-                                                            json={'query': nr_gql_enable_formatted}).json()
+                                                            json={'query': nr_gql_enable_fmtd}).json()
                                 logger.debug(f'New Relic API response:\n{nr_response}')
 
                                 try:
@@ -279,14 +281,14 @@ def check_nr_rules(monday_items, muting_df, logger):
                             else:
                                 logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
 
-                                nr_gql_mutate_formatted = nr_gql_mutate_template.substitute({'account_id': nr_account_num,
-                                                                                             'start_time': start_time_nr,
-                                                                                             'end_time': end_time_nr,
-                                                                                             'rule_id': muting_rule_id,
-                                                                                             'enabled': 'true'})
+                                nr_gql_mutate_fmtd = nr_gql_mutate_template.substitute({'account_id': nr_account_num,
+                                                                                        'start_time': start_time_nr,
+                                                                                        'end_time': end_time_nr,
+                                                                                        'rule_id': muting_rule_id,
+                                                                                        'enabled': 'true'})
                                 nr_response = requests.post(nr_endpoint,
                                                             headers=nr_headers,
-                                                            json={'query': nr_gql_mutate_formatted}).json()
+                                                            json={'query': nr_gql_mutate_fmtd}).json()
                                 logger.debug(f'New Relic API response:\n{nr_response}')
 
                                 try:
@@ -306,16 +308,17 @@ def check_nr_rules(monday_items, muting_df, logger):
 
                     for muting_rule_id in muting_rule_ids:
                         # Query rule to check if it is enabled or disabled
-                        nr_gql_query_formatted = nr_gql_query_template.substitute({'account_id': nr_account_num,
-                                                                                   'rule_id': muting_rule_id})
+                        nr_gql_query_fmtd = nr_gql_query_template.substitute({'account_id': nr_account_num,
+                                                                              'rule_id': muting_rule_id})
                         nr_response = requests.post(nr_endpoint,
                                                     headers=nr_headers,
-                                                    json={'query': nr_gql_query_formatted}).json()
+                                                    json={'query': nr_gql_query_fmtd}).json()
                         logger.debug(f'New Relic API response:\n{nr_response}')
 
                         try:
                             # If the 'errors' key exists in the API response, log the error
-                            logger.warning(f'      NR error for {muting_rule_id}: {nr_response["errors"][0]["message"]}')
+                            logger.warning(f'      NR error for {muting_rule_id}: '
+                                           f'{nr_response["errors"][0]["message"]}')
                             rule_ids_not_mutated.append(muting_rule_id)
                         except KeyError:
                             # If the 'errors' key does not exist in the API response, disable the rul if necessary
@@ -323,13 +326,13 @@ def check_nr_rules(monday_items, muting_df, logger):
                                 logger.info(f'      Muting rule {muting_rule_id} is already disabled; no action taken.')
                                 continue
                             else:
-                                nr_gql_disable_formatted = nr_gql_enable_template.substitute(
+                                nr_gql_disable_fmtd = nr_gql_enable_template.substitute(
                                     {'account_id': nr_account_num,
                                      'rule_id': muting_rule_id,
                                      'enabled': 'false'})
                                 nr_response = requests.post(nr_endpoint,
                                                             headers=nr_headers,
-                                                            json={'query': nr_gql_disable_formatted}).json()
+                                                            json={'query': nr_gql_disable_fmtd}).json()
                                 logger.debug(f'New Relic API response:\n{nr_response}')
 
                                 if nr_response['data']['alertsMutingRuleUpdate']['id'] == str(muting_rule_id):
