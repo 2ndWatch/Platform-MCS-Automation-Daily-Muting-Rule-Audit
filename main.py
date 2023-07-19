@@ -111,28 +111,36 @@ def get_muting_rule_info(client, envir, df, logger):
         return None, None
 
 
-def mutate_nr_rules(monday_items, muting_df, logger):
+# TODO: check handling for Neighborly
+def check_nr_rules(monday_items, muting_df, logger):
     logger.info('Processing patching events...')
     rule_ids_not_mutated = []
+    events_not_processed = []
+    nr_response = None
 
     # Iterate through patching events and action any events that are still in progress
-    for i in range(34, 39):
+    # for i in range(len(monday_items)):
+    for i in range(44, 48):
         event_status = monday_items[i]['column_values'][1]['text']
         client_name = monday_items[i]['name']
         environment = monday_items[i]['column_values'][0]['text']
-        start_time = monday_items[i]['column_values'][2]['text']
         patching_window = monday_items[i]['column_values'][3]['text']
+        start_time = monday_items[i]['column_values'][2]['text']
+        # Format start time string
+        start_time_split = start_time.split(' ')
+        start_time_nr = start_time_split[0] + 'T' + start_time_split[1] + ':00'
+        # Calculate end time and format string
         end_time_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M') + timedelta(hours=float(patching_window))
-        end_time = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
+        end_time_nr = datetime.strftime(end_time_dt, '%Y-%m-%dT%H:%M:%S')
 
-        clients_without_muting = ['2W Infra', 'Gas Station TV', 'Michael Kors', 'NAIC', 'TitleMax']
+        clients_without_muting = ['2W Infra', 'Gas Station TV', 'Michael Kors', 'NAIC', 'Symetra', 'TitleMax']
 
         if client_name in clients_without_muting:
             logger.info(f'\n   Event {i + 1}: {client_name} does not have muting rules in place; skipping event.')
             continue
         else:
-            logger.info(f'\n   Event {i + 1}: {event_status} for {client_name} {environment} at {start_time} '
-                        f'for {patching_window} hours, ending at {end_time}.')
+            logger.info(f'\n   Event {i + 1}: {event_status} for {client_name} {environment} at {start_time_nr} '
+                        f'for {patching_window} hours, ending at {end_time_nr}.')
 
             if TESTING:
                 # Test data for mutating a rule in 2W-MCS-Tooling-Test NR account
@@ -151,65 +159,96 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                 'Content-Type': 'application/json',
                 'API-Key': nr_api_key,
             }
-
-            # Event statuses: 'Paused/On_Hold', 'To-Do', 'Event Prep In Progress', 'Event Complete', 'All Compliant'
-            if event_status == 'Event Prep In Progress':
-                # Mutate correct muting rule with correctly-formatted date and time
-                # Format start time string
-                start_time_split = start_time.split(' ')
-                start_time_nr = start_time_split[0] + 'T' + start_time_split[1] + ':00'
-                nr_gql_mutate_template = Template("""
+            nr_gql_mutate_template = Template("""
                 mutation {
-                  alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: {enabled: true, schedule: 
+                  alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: {enabled: $enabled, schedule: 
                     {startTime: "$start_time", endTime: "$end_time"}}) {
                     id
                   }
                 }
                 """)
+            nr_gql_query_template = Template("""
+                    {
+                      actor {
+                        account(id: $account_id) {
+                          alerts {
+                            mutingRule(id: $rule_id) {
+                              id
+                              enabled
+                              schedule {
+                                endTime
+                                startTime
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                """)
+            nr_gql_enable_template = Template("""
+                mutation {
+                    alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: 
+                      {enabled: $enabled}) {
+                      id
+                  }
+                }
+                """)
 
+            if event_status == 'Event Prep In Progress' or event_status == 'To-Do':
+                # Check rule for start and end time and enabled;
+                # if needed, mutate if times are incorrect and enable rule
                 for muting_rule_id in muting_rule_ids:
-                    # TODO: check muting rule for start, end time
-                    # if start time and end time = what's in Monday
-                    # continue
-                    # else: mutate
-                    logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
+                    nr_gql_query_formatted = nr_gql_query_template.substitute({'account_id': nr_account_num,
+                                                                               'rule_id': muting_rule_id})
+                    try:
+                        nr_response = requests.post(nr_endpoint,
+                                                    headers=nr_headers,
+                                                    json={'query': nr_gql_query_formatted}).json()
+                        logger.debug(f'New Relic API response:\n{nr_response}')
 
-                    # GraphQL query data to mutate the appropriate muting rule
-                    nr_gql_mutate_formatted = nr_gql_mutate_template.substitute({'account_id': nr_account_num,
-                                                                                 'start_time': start_time_nr,
-                                                                                 'end_time': end_time,
-                                                                                 'rule_id': muting_rule_id})
+                        event_rule = nr_response['data']['actor']['account']['alerts']['mutingRule']
+                        event_start = event_rule['schedule']['startTime']
+                        event_end = event_rule['schedule']['endTime']
+                        enabled = event_rule['enabled']
 
-                    nr_response = requests.post(nr_endpoint,
-                                                headers=nr_headers,
-                                                json={'query': nr_gql_mutate_formatted}).json()
-                    logger.debug(f'New Relic API response:\n{nr_response}')
+                        # If event start time and end time match what's in Monday, skip mutation
+                        if start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and enabled:
+                            logger.info(f'   Muting rule {muting_rule_id} times match Monday event; no action taken.')
+                            continue
+                        elif start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and not enabled:
+                            # TODO: enable rule
+                            continue
+                        else:
+                            logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
 
-                    if nr_response['data']['alertsMutingRuleUpdate']['id'] == muting_rule_id:
-                        logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
-                    else:
-                        logger.warning(f'      There was an error mutating the muting role:\n{nr_response}')
+                            nr_gql_mutate_formatted = nr_gql_mutate_template.substitute({'account_id': nr_account_num,
+                                                                                         'start_time': start_time_nr,
+                                                                                         'end_time': end_time_nr,
+                                                                                         'rule_id': muting_rule_id,
+                                                                                         'enabled': 'true'})
+
+                            try:
+                                nr_response = requests.post(nr_endpoint,
+                                                            headers=nr_headers,
+                                                            json={'query': nr_gql_mutate_formatted}).json()
+                                logger.debug(f'New Relic API response:\n{nr_response}')
+
+                                if nr_response['data']['alertsMutingRuleUpdate']['id'] == str(muting_rule_id):
+                                    logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
+                            except KeyError:
+                                logger.warning(f'      There was an error mutating the muting role:\n{nr_response}')
+                                rule_ids_not_mutated.append(muting_rule_id)
+                                continue
+                    except KeyError:
+                        logger.warning(f'      There was an error querying the muting role:\n{nr_response}')
                         rule_ids_not_mutated.append(muting_rule_id)
                         continue
             elif event_status == 'Event Complete' or event_status == 'Paused/On-Hold' or \
                     event_status == 'All Compliant':
                 logger.info(f'   Checking enabled/disabled muting rule status for this event...')
-                nr_gql_query_template = Template("""
-                {
-                  actor {
-                    account(id: $account_id) {
-                      alerts {
-                        mutingRule(id: $rule_id) {
-                          id
-                          enabled
-                        }
-                      }
-                    }
-                  }
-                }
-                """)
 
                 for muting_rule_id in muting_rule_ids:
+
                     nr_gql_query_formatted = nr_gql_query_template.substitute({'account_id': nr_account_num,
                                                                                'rule_id': muting_rule_id})
 
@@ -226,17 +265,11 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                             logger.info(f'      Muting rule {muting_rule_id} is already disabled; no action taken.')
                             continue
                         else:
-                            nr_gql_disable_template = Template("""
-                            mutation {
-                                alertsMutingRuleUpdate(accountId: $account_id, id: $rule_id, rule: 
-                                  {enabled: false}) {
-                                  id
-                              }
-                            }
-                            """)
-                            nr_gql_disable_formatted = nr_gql_disable_template.substitute(
+
+                            nr_gql_disable_formatted = nr_gql_enable_template.substitute(
                                 {'account_id': nr_account_num,
-                                 'rule_id': muting_rule_id})
+                                 'rule_id': muting_rule_id,
+                                 'enabled': 'false'})
 
                             nr_response = requests.post(nr_endpoint,
                                                         headers=nr_headers,
@@ -250,17 +283,22 @@ def mutate_nr_rules(monday_items, muting_df, logger):
                                                f'{nr_response}')
                                 rule_ids_not_mutated.append(muting_rule_id)
                                 continue
+            else:
+                logger.warning(f'   Status "{event_status}" is a mismatch. Skipping event.')
+                events_not_processed.append(f'{client_name} {environment}')
+                continue
 
-    return rule_ids_not_mutated
+    return rule_ids_not_mutated, events_not_processed
 
 
 def handler(event, context):
     logger = initialize_logger()
     muting_df = get_stored_rule_data(logger)
     monday_items = get_patching_events(logger)
-    not_mutated = mutate_nr_rules(monday_items, muting_df, logger)
+    not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
     logger.warning(f'\nProcessing is complete.\n'
-                   f'   The following rule IDs were not mutated due to errors: {not_mutated}')
+                   f'   The following rule IDs were not mutated due to errors: {not_mutated}\n'
+                   f'   The following events were not processed due to errors: {not_processed}')
 
 
 handler('', '')
