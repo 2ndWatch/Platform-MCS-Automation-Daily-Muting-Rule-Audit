@@ -10,7 +10,6 @@ import io
 
 
 # TODO: service account API keys - which ones?
-# TODO: send log to S3
 
 
 session = boto3.Session()
