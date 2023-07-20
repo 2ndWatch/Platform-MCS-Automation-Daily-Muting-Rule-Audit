@@ -8,27 +8,18 @@ import boto3
 from botocore import exceptions
 import io
 
-
-# TODO: service account API keys - which ones?
-
-
 session = boto3.Session()
 s3 = session.client('s3')
 ssm = session.client('ssm')
+sns = session.client('sns')
 
 BUCKET = '2w-nr-muting-rules-automation'
-LOG_FILE = f'muting_automation_{datetime.now().strftime("%Y-%m-%d_%H%M%S")}.log'
+TOPIC_ARN = 'arn:aws:sns:us-east-1:187940856853:2w-nr-muting-rules-automation-topic'
 
 
 def initialize_logger():
-    # Initialize the logger
-    logger = logging.getLogger('muting_change')
-    logging.basicConfig(level=logging.DEBUG,
-                        filename=LOG_FILE,
-                        filemode='a')
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.INFO)
-    logger.addHandler(console)
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
 
     return logger
 
@@ -148,21 +139,6 @@ def transform_event_times(start, window, start_delta=None):
     return start_time, end_time
 
 
-def send_log_to_s3(logger):
-    logger.info('Sending the log file to S3...')
-    body = open(LOG_FILE, 'rb')
-    key = f'logs/{LOG_FILE}'
-
-    try:
-        response = s3.upload_file(LOG_FILE, Bucket=BUCKET, Key=key)
-        logger.info('   The log file has been uploaded successfully.')
-    except exceptions.ClientError as e:
-        logger.warning(f'   There was an error uploading the log:\n'
-                       f'   {e}')
-
-    body.close()
-
-
 def check_nr_rules(monday_items, muting_df, logger):
     logger.info('Processing patching events...')
     rule_ids_not_mutated = []
@@ -237,8 +213,7 @@ def check_nr_rules(monday_items, muting_df, logger):
             }
             """)
 
-        # for i in range(len(monday_items)):
-        for i in range(30, 31):
+        for i in range(len(monday_items)):
             event_status = monday_items[i]['column_values'][1]['text']
             client_name = monday_items[i]['name']
             environment = monday_items[i]['column_values'][0]['text']
@@ -397,20 +372,28 @@ def check_nr_rules(monday_items, muting_df, logger):
                     logger.warning(f'   Status "{event_status}" is a mismatch. Skipping event.')
                     events_not_processed.append(f'{client_name} {environment}')
                     continue
-        return rule_ids_not_mutated, events_not_processed
+        return 0, rule_ids_not_mutated, events_not_processed
     except Exception as e:
         logger.warning(f'\nThere was a general error:\n   {e}')
+        return 1, e, []
 
 
 def handler(event, context):
     logger = initialize_logger()
     muting_df = get_stored_rule_data(logger)
     monday_items = get_patching_events(logger)
-    not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
-    logger.info(f'\nProcessing is complete.\n'
-                   f'   The following rule IDs were not mutated due to errors: {not_mutated}\n'
-                   f'   The following events were not processed due to errors: {not_processed}')
-    send_log_to_s3(logger)
+    process_code, not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
 
+    not_mutated_msg = f'   The following rule IDs were not mutated due to errors: {not_mutated}'
+    not_processed_msg = f'   The following events were not processed due to errors: {not_processed}'
+    if process_code < 1:
+        logger.info(f'\nProcessing is complete.\n   {not_mutated_msg}\n   {not_processed_msg}')
+        subject = 'Muting automation success'
+        message = f'The muting automation function ran successfully.\n\n{not_mutated_msg}\n{not_processed_msg}'
+    else:
+        subject = 'Muting automation error'
+        message = f'The muting automation function encountered a general error:\n\n{not_mutated}\n\n'
 
-handler('', '')
+    # Send an SNS notification upon code completion
+    response = sns.publish(TopicArn=TOPIC_ARN, Subject=subject, Message=message)
+    logger.info(response)
