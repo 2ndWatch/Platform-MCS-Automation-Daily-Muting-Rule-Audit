@@ -240,7 +240,8 @@ def check_nr_rules(monday_items, muting_df, logger):
                 if not muting_rule_ids:
                     continue
 
-                if event_status == 'Event Prep In Progress' or event_status == 'To-Do':
+                if event_status == 'Event Prep In Progress' or event_status == 'To-Do' or \
+                        event_status == 'Event In Progress':
                     # Check rule for start and end time and enabled;
                     # if needed, mutate if times are incorrect and enable rule
                     for muting_rule_id in muting_rule_ids:
