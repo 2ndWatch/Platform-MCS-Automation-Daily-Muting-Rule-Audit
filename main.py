@@ -297,7 +297,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                                 except KeyError:
                                     logger.warning(f'      There was an error enabling the muting role:\n'
                                                    f'{nr_response}')
-                                    rule_ids_not_mutated.append(muting_rule_id)
+                                    rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                                 continue
                             else:
                                 logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
@@ -323,11 +323,11 @@ def check_nr_rules(monday_items, muting_df, logger):
                                         logger.info(f'      Muting rule ID {muting_rule_id} was successfully modified.')
                                 except KeyError:
                                     logger.warning(f'      There was an error mutating the muting role:\n{nr_response}')
-                                    rule_ids_not_mutated.append(muting_rule_id)
+                                    rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                                     continue
                         except KeyError:
                             logger.warning(f'      There was an error querying the muting role:\n{nr_response}')
-                            rule_ids_not_mutated.append(muting_rule_id)
+                            rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                             continue
                 elif event_status == 'Event Complete' or event_status == 'Paused/On-Hold' or \
                         event_status == 'All Compliant':
@@ -346,7 +346,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                             # If the 'errors' key exists in the API response, log the error
                             logger.warning(f'      NR error for {muting_rule_id}: '
                                            f'{nr_response["errors"][0]["message"]}')
-                            rule_ids_not_mutated.append(muting_rule_id)
+                            rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                         except KeyError:
                             # If the 'errors' key does not exist in the API response, disable the rul if necessary
                             if not nr_response['data']['actor']['account']['alerts']['mutingRule']['enabled']:
@@ -367,11 +367,11 @@ def check_nr_rules(monday_items, muting_df, logger):
                                 else:
                                     logger.warning(f'      There was an error disabling the muting role:\n'
                                                    f'{nr_response}')
-                                    rule_ids_not_mutated.append(muting_rule_id)
+                                    rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                                     continue
                 else:
-                    logger.warning(f'   Status "{event_status}" is a mismatch. Skipping event.')
-                    events_not_processed.append(f'{client_name} {environment}')
+                    logger.warning(f'   Status "{event_status}" is a mismatch for event {i + 1}. Skipping event.')
+                    events_not_processed.append(f'Event {i + 1}: {client_name} {environment}')
                     continue
         return 0, rule_ids_not_mutated, events_not_processed
     except Exception as e:
