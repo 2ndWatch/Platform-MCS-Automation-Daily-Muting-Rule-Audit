@@ -389,10 +389,15 @@ def handler(event, context):
     monday_items = get_patching_events(logger)
     process_code, not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
 
-    not_mutated_msg = f'   The following rule IDs were not mutated due to errors: {not_mutated}'
-    not_processed_msg = f'   The following events were not processed due to errors: {not_processed}'
+    not_mutated_msg = f'The following rule IDs were not mutated due to errors:\n'
+    for nm_item in not_mutated:
+        not_mutated_msg += f'{nm_item}\n'
+    not_processed_msg = f'The following events were not processed due to errors:\n'
+    for np_item in not_processed:
+        not_processed_msg += f'{np_item}\n'
+
     if process_code < 1:
-        logger.info(f'\nProcessing is complete.\n   {not_mutated_msg}\n   {not_processed_msg}')
+        logger.info(f'\nProcessing is complete.\n{not_mutated_msg}\n{not_processed_msg}')
         subject = 'Muting automation success'
         message = f'The muting automation function ran successfully.\n\n{not_mutated_msg}\n{not_processed_msg}'
     else:
