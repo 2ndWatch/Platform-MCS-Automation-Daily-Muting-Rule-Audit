@@ -240,7 +240,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                 if not muting_rule_ids:
                     continue
 
-                if event_status in ['Event Prep In Progress', 'To-Do', 'Event In Progress']:
+                if event_status in ['Event Prep In Progress', 'To-Do', 'Event Scheduled']:
                     # Check rule for start and end time and enabled;
                     # if needed, mutate if times are incorrect and enable rule
                     for muting_rule_id in muting_rule_ids:
@@ -328,7 +328,9 @@ def check_nr_rules(monday_items, muting_df, logger):
                             logger.warning(f'      There was an error querying the muting role:\n{nr_response}')
                             rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                             continue
-                elif event_status in ['Event Complete', 'Paused/On-Hold', 'All Compliant']:
+                elif event_status in ['Event Complete', 'Paused/On-Hold', 'All Compliant', 'Event Failed',
+                                      'Event Cancelled', 'Engineering Team Assigned', 'Event to be Rescheduled',
+                                      'Awaiting Approval/Review']:
                     logger.info(f'   Checking enabled/disabled muting rule status for this event...')
 
                     for muting_rule_id in muting_rule_ids:
@@ -367,9 +369,13 @@ def check_nr_rules(monday_items, muting_df, logger):
                                                    f'{nr_response}')
                                     rule_ids_not_mutated.append(f'Event {i + 1}: {muting_rule_id}')
                                     continue
+                elif event_status == 'Event In Progress':
+                    logger.info(f'Event {i + 1} for {client_name} {environment} is in progress; no action taken.')
+                    events_not_processed.append(f'Event {i + 1}: {event_status} --> {client_name} {environment}')
+                    continue
                 else:
                     logger.warning(f'   Status "{event_status}" is a mismatch for event {i + 1}. Skipping event.')
-                    events_not_processed.append(f'Event {i + 1}: {client_name} {environment}')
+                    events_not_processed.append(f'Event {i + 1}: {event_status} --> {client_name} {environment}')
                     continue
         return 0, rule_ids_not_mutated, events_not_processed
     except Exception as e:
