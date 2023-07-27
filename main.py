@@ -19,7 +19,7 @@ TOPIC_ARN = 'arn:aws:sns:us-east-1:187940856853:2w-nr-muting-rules-automation-to
 
 def initialize_logger():
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     return logger
 
@@ -379,7 +379,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                     continue
         return 0, rule_ids_not_mutated, events_not_processed
     except Exception as e:
-        logger.warning(f'\nThere was a general error:\n   {e}')
+        logger.warning(f'\nThere was a general error:\n{e}')
         return 1, e, []
 
 
@@ -390,19 +390,27 @@ def handler(event, context):
     process_code, not_mutated, not_processed = check_nr_rules(monday_items, muting_df, logger)
 
     not_mutated_msg = f'The following rule IDs were not mutated due to errors:\n'
-    for nm_item in not_mutated:
-        not_mutated_msg += f'{nm_item}\n'
+    try:
+        for nm_item in not_mutated:
+            not_mutated_msg += f'{nm_item}\n'
+    except TypeError:
+        not_mutated_msg = not_mutated
     not_processed_msg = f'The following events were not processed due to errors:\n'
     for np_item in not_processed:
         not_processed_msg += f'{np_item}\n'
 
-    if process_code < 1:
+    if process_code == 0:
         logger.info(f'\nProcessing is complete.\n{not_mutated_msg}\n{not_processed_msg}')
-        subject = 'Muting automation success'
+        subject = 'Daily muting automation success'
         message = f'The muting automation function ran successfully.\n\n{not_mutated_msg}\n{not_processed_msg}'
+    elif process_code == 1:
+        subject = 'Daily muting automation error'
+        message = f'The muting automation function encountered a general error:\n\n{not_mutated_msg}\n\nPlease ' \
+                  f'review the logs from this run.'
     else:
-        subject = 'Muting automation error'
-        message = f'The muting automation function encountered a general error:\n\n{not_mutated}\n\n'
+        subject = 'Daily muting automation oddity'
+        message = f'Something strange happened with the muting automation function and it did not complete. Please ' \
+                  f'review the logs from this run.'
 
     # Send an SNS notification upon code completion
     response = sns.publish(TopicArn=TOPIC_ARN, Subject=subject, Message=message)
