@@ -262,9 +262,14 @@ def check_nr_rules(monday_items, muting_df, logger):
                             logger.debug(f'New Relic API response:\n{nr_response}')
 
                             event_rule = nr_response['data']['actor']['account']['alerts']['mutingRule']
-                            event_start = event_rule['schedule']['startTime']
-                            event_end = event_rule['schedule']['endTime']
                             enabled = event_rule['enabled']
+                            # handle muting rules without a start or end time already in place
+                            try:
+                                event_start = event_rule['schedule']['startTime']
+                                event_end = event_rule['schedule']['endTime']
+                            except TypeError:
+                                event_start = '2023-01-01T00:00:00'
+                                event_end = '2023-01-01T01:00:00'
 
                             # If rule start time and end time match Monday event data, skip mutation
                             if start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and enabled:
