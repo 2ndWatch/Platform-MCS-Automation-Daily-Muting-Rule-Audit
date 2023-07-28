@@ -7,6 +7,7 @@ import logging
 import boto3
 from botocore import exceptions
 import io
+from traceback import print_exc
 
 session = boto3.Session()
 s3 = session.client('s3')
@@ -122,7 +123,7 @@ def get_muting_rule_info(client, envir, df, logger):
             logger.warning(f'      {client} {envir} does not have a muting rule in place.')
         else:
             logger.warning(f'      There was an error extracting muting rule information:\n'
-                           f'      {e.__class__.__name__}: {e}')
+                           f'      {error_type}:\n{print_exc()}')
         return None, None
 
 
@@ -247,11 +248,14 @@ def check_nr_rules(monday_items, muting_df, logger):
 
                         # Special time handling for Neighborly event times
                         if client_name == 'Neighborly':
-                            nbly_patching_window = nbly_patching_windows[muting_rule_id]['length']
-                            start_delta = nbly_patching_windows[muting_rule_id]['delta']
-                            start_time_nr, end_time_nr = transform_event_times(start_time,
-                                                                               nbly_patching_window,
-                                                                               start_delta=start_delta)
+                            try:
+                                nbly_patching_window = nbly_patching_windows[muting_rule_id]['length']
+                                start_delta = nbly_patching_windows[muting_rule_id]['delta']
+                                start_time_nr, end_time_nr = transform_event_times(start_time,
+                                                                                   nbly_patching_window,
+                                                                                   start_delta=start_delta)
+                            except KeyError:
+                                logger.debug('Neighborly Spillover event. No timedelta needed.')
 
                         nr_gql_query_fmtd = nr_gql_query_template.substitute({'account_id': nr_account_num,
                                                                               'rule_id': muting_rule_id})
@@ -268,8 +272,8 @@ def check_nr_rules(monday_items, muting_df, logger):
                                 event_start = event_rule['schedule']['startTime']
                                 event_end = event_rule['schedule']['endTime']
                             except TypeError:
-                                event_start = '2023-01-01T00:00:00'
-                                event_end = '2023-01-01T01:00:00'
+                                event_start = '2023-01-01T00:00:00-06:00'
+                                event_end = '2023-01-01T01:00:00-06:00'
 
                             # If rule start time and end time match Monday event data, skip mutation
                             if start_time_nr == event_start[:19] and end_time_nr == event_end[:19] and enabled:
@@ -305,6 +309,8 @@ def check_nr_rules(monday_items, muting_df, logger):
                                 continue
                             else:
                                 logger.info(f'   Mutating muting rule {muting_rule_id} for {client_name}...')
+                                logger.debug(f'Start time to be entered: {start_time_nr}')
+                                logger.debug(f'End time to be entered: {end_time_nr}')
 
                                 nr_gql_mutate_fmtd = nr_gql_mutate_template.substitute({'account_id': nr_account_num,
                                                                                         'start_time': start_time_nr,
@@ -384,7 +390,7 @@ def check_nr_rules(monday_items, muting_df, logger):
                     continue
         return 0, rule_ids_not_mutated, events_not_processed
     except Exception as e:
-        logger.warning(f'\nThere was a general error:\n{e}')
+        logger.warning(f'\nThere was a general error:\n{e.__class__.__name__}\n{print_exc()}')
         return 1, e, []
 
 
