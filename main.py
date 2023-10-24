@@ -221,9 +221,8 @@ def check_nr_rules(monday_items, muting_df, logger):
             patching_window = monday_items[i]['column_values'][3]['text']
             start_time = monday_items[i]['column_values'][2]['text']
 
-            start_time_nr, end_time_nr = transform_event_times(start_time, patching_window)
-
-            clients_without_muting = ['2W Infra', 'Gas Station TV', 'Michael Kors', 'NAIC', 'Symetra', 'TitleMax']
+            clients_without_muting = ['Ollion Infra', 'Gas Station TV', 'Michael Kors', 'NAIC', 'Symetra', 'TitleMax',
+                                      'Rayonier AM', 'test']
 
             if client_name in clients_without_muting:
                 logger.info(f'\n   Event {i + 1}: {client_name} does not have muting rules in place; skipping event.')
@@ -233,6 +232,9 @@ def check_nr_rules(monday_items, muting_df, logger):
                 logger.info(f'\n   Event {i + 1}: More recent Lenovo event is scheduled; skipping event.')
                 continue
             else:
+                # print(f"Patching window for {client_name}: {patching_window}; data type: {type(patching_window)}")
+                start_time_nr, end_time_nr = transform_event_times(start_time, patching_window)
+
                 logger.info(f'\n   Event {i + 1}: {event_status} for {client_name} {environment} at {start_time_nr} '
                             f'for {patching_window} hours, ending at {end_time_nr}.')
 
@@ -426,3 +428,9 @@ def handler(event, context):
     # Send an SNS notification upon code completion
     response = sns.publish(TopicArn=TOPIC_ARN, Subject=subject, Message=message)
     logger.info(response)
+
+
+event = ""
+context = ""
+
+handler(event, context)
